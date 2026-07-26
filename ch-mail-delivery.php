@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       CH Mail Delivery
  * Description:       Routes all WordPress email through authenticated SMTP (Brevo) with configurable From and Reply-To. Companion utility for the club hockey site portfolio — fixes silent mail drops on shared hosting.
- * Version:           1.0.0
+ * Version:           1.0.1
  * Author:            Connor Mesec
  * License:           GPL-2.0-or-later
  * Text Domain:       ch-mail-delivery
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'CH_MAILDEL_VERSION', '1.0.0' );
+define( 'CH_MAILDEL_VERSION', '1.0.1' );
 define( 'CH_MAILDEL_FILE', __FILE__ );
 define( 'CH_MAILDEL_PATH', plugin_dir_path( __FILE__ ) );
 
@@ -80,6 +80,23 @@ function ch_maildel_from_name() {
 	return wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
 }
 
+/**
+ * Strip pre-applied quoting from a display name. Some senders (e.g. Divi's
+ * contact form) build headers like 'Reply-To: "Name" <a@b>'; wp_mail() keeps
+ * the quotes as part of the name, PHPMailer then quotes AND escapes it again,
+ * and clients render it as \"Name\". Unwrap so PHPMailer quotes it exactly once.
+ *
+ * @param string $name
+ * @return string
+ */
+function ch_maildel_clean_name( $name ) {
+	$name = trim( (string) $name );
+	if ( strlen( $name ) >= 2 && '"' === $name[0] && '"' === substr( $name, -1 ) ) {
+		$name = substr( $name, 1, -1 );
+	}
+	return str_replace( array( '\\"', '\\\\' ), array( '"', '\\' ), $name );
+}
+
 /*
  * Route the mailer through SMTP, and give every email a Reply-To when the
  * sender didn't set one — so replies reach a real inbox, never the noreply
@@ -100,7 +117,15 @@ add_action( 'phpmailer_init', function ( $phpmailer ) {
 	$phpmailer->Username   = $s['smtp_login'];
 	$phpmailer->Password   = $s['smtp_key'];
 
-	if ( empty( $phpmailer->getReplyToAddresses() ) ) {
+	// Normalize names that arrived pre-quoted (see ch_maildel_clean_name).
+	$phpmailer->FromName = ch_maildel_clean_name( $phpmailer->FromName );
+	$reply_tos           = $phpmailer->getReplyToAddresses();
+	if ( $reply_tos ) {
+		$phpmailer->clearReplyTos();
+		foreach ( $reply_tos as $entry ) {
+			$phpmailer->addReplyTo( $entry[0], ch_maildel_clean_name( isset( $entry[1] ) ? $entry[1] : '' ) );
+		}
+	} else {
 		$reply_to = ch_maildel_reply_to();
 		if ( $reply_to ) {
 			$phpmailer->addReplyTo( $reply_to, ch_maildel_from_name() );
